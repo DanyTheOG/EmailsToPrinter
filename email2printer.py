@@ -15,8 +15,6 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfbase.pdfmetrics import stringWidth
 
-# Register a basic font (if needed)
-pdfmetrics.registerFont(TTFont('Helvetica', 'Helvetica.ttf'))
 
 # Environment variables from GitHub secrets
 GMAIL_USER = os.environ.get("GMAIL_USER")
