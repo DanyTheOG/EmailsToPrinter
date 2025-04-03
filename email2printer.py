@@ -1,6 +1,5 @@
 import imaplib
 import email
-from email.header import decode_header
 import os
 import datetime
 from io import BytesIO
@@ -11,44 +10,37 @@ import openpyxl
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter, landscape
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfbase.pdfmetrics import stringWidth
-
 
 # Environment variables from GitHub secrets
 GMAIL_USER = os.environ.get("GMAIL_USER")
 GMAIL_PASSWORD = os.environ.get("GMAIL_PASSWORD")
 PRINTER_EMAIL = os.environ.get("PRINTER_EMAIL")
 
-# Constants
-SEARCH_PHRASE = "Daily Lead Report"
-ATTACHMENT_EXT = ".xlsx"
-TEMP_PDF = "report.pdf"
+SEARCH_PHRASE = "Daily Leads Report"  # Text to search for in email body
+ATTACHMENT_EXT = ".xlsx"             # Excel attachment extension
+TEMP_PDF = "report.pdf"              # Temporary PDF file name
 
 def connect_imap():
+    """Connect to Gmail via IMAP."""
     mail = imaplib.IMAP4_SSL("imap.gmail.com")
     mail.login(GMAIL_USER, GMAIL_PASSWORD)
     return mail
 
 def search_emails(mail):
+    """Search the inbox for emails since yesterday."""
     mail.select("inbox")
-    # Search for emails from self containing the phrase in the body
-    status, messages = mail.search(None, f'(FROM "{GMAIL_USER}" BODY "{SEARCH_PHRASE}")')
+    since_date = (datetime.date.today() - datetime.timedelta(days=1)).strftime("%d-%b-%Y")
+    status, messages = mail.search(None, f'(SINCE "{since_date}")')
     if status != "OK":
         print("No messages found!")
         return []
-    # messages is a byte string of space-separated email IDs
     email_ids = messages[0].split()
     return email_ids
 
 def is_recent(date_str):
-    """
-    Check if the email date (from the header) is within the last 12 hours.
-    The date_str is typically in RFC 2822 format.
-    """
+    """Return True if the email date is within the last 12 hours."""
     try:
-        # Parse email date
         email_date = email.utils.parsedate_to_datetime(date_str)
         now = datetime.datetime.now(email_date.tzinfo)
         delta = now - email_date
@@ -57,8 +49,29 @@ def is_recent(date_str):
         print("Error parsing date:", e)
         return False
 
+def get_email_body(msg):
+    """Extract and return the plain text body from the email message."""
+    if msg.is_multipart():
+        for part in msg.walk():
+            if part.get_content_type() == "text/plain":
+                try:
+                    return part.get_payload(decode=True).decode(part.get_content_charset() or 'utf-8')
+                except Exception as e:
+                    print("Error decoding email part:", e)
+                    return ""
+    else:
+        try:
+            return msg.get_payload(decode=True).decode(msg.get_content_charset() or 'utf-8')
+        except Exception as e:
+            print("Error decoding email:", e)
+            return ""
+    return ""
+
 def get_latest_attachment(mail, email_ids):
-    latest_email = None
+    """
+    Iterate through emails, filter by date and body content, and 
+    return the attachment data from the most recent qualifying email.
+    """
     latest_date = None
     attachment_data = None
 
@@ -67,40 +80,41 @@ def get_latest_attachment(mail, email_ids):
         if status != "OK":
             continue
         msg = email.message_from_bytes(msg_data[0][1])
-        # Check the Date header
         date_hdr = msg.get("Date")
         if not date_hdr or not is_recent(date_hdr):
             continue
 
-        # Process each part looking for an Excel attachment
+        # Check if the email body contains the search phrase
+        body = get_email_body(msg)
+        if SEARCH_PHRASE not in body:
+            continue
+
+        # Look for an Excel attachment in the email
         for part in msg.walk():
             if part.get_content_disposition() == "attachment":
                 filename = part.get_filename()
                 if filename and filename.lower().endswith(ATTACHMENT_EXT):
-                    # Get the email date as a datetime object
                     email_date = email.utils.parsedate_to_datetime(date_hdr)
                     if (latest_date is None) or (email_date > latest_date):
                         latest_date = email_date
-                        latest_email = msg
                         attachment_data = part.get_payload(decode=True)
-    return latest_email, attachment_data
+    return attachment_data
 
 def convert_excel_to_pdf(excel_data):
-    # Load workbook from bytes
+    """Convert the first sheet of the Excel file to a PDF."""
     wb = openpyxl.load_workbook(BytesIO(excel_data), data_only=True)
-    ws = wb.active  # use the first sheet
+    ws = wb.active  # Use the first sheet
 
-    # Gather data from worksheet into a list of lists
+    # Extract worksheet data into a list of lists
     data = []
     for row in ws.iter_rows(values_only=True):
         data.append([str(cell) if cell is not None else "" for cell in row])
-
-    # Calculate approximate column widths based on maximum text width in each column
+    
+    # Calculate approximate column widths based on max text width per column
     col_widths = []
     for col in zip(*data):
         max_width = max([stringWidth(str(item), 'Helvetica', 10) for item in col] + [0])
-        # add some padding
-        col_widths.append(max_width + 10)
+        col_widths.append(max_width + 10)  # add padding
 
     # Create PDF document in landscape orientation
     doc = SimpleDocTemplate(
@@ -109,36 +123,32 @@ def convert_excel_to_pdf(excel_data):
         rightMargin=30, leftMargin=30,
         topMargin=30, bottomMargin=18,
     )
-
-    # Create a table with the data
+    
+    # Create a table with gridlines and centered text
     table = Table(data, colWidths=col_widths)
-    # Apply table style for gridlines and alignment
     style = TableStyle([
         ('GRID', (0, 0), (-1, -1), 1, colors.black),
         ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
     ])
     table.setStyle(style)
-
-    # Build PDF
+    
     elements = [table]
     doc.build(elements)
 
 def send_email(pdf_path):
-    # Compose email
+    """Send an email with the PDF attached."""
     msg = EmailMessage()
     now = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
     msg["Subject"] = f"Daily Report {now}"
     msg["From"] = GMAIL_USER
     msg["To"] = PRINTER_EMAIL
     msg.set_content("this email it to be printed")
-
-    # Attach PDF
+    
     with open(pdf_path, "rb") as f:
         pdf_data = f.read()
     msg.add_attachment(pdf_data, maintype="application", subtype="pdf", filename="report.pdf")
 
-    # Send email via Gmail SMTP
     try:
         server = smtplib.SMTP("smtp.gmail.com", 587)
         server.starttls()
@@ -158,7 +168,7 @@ def main():
             print("No emails found matching the criteria.")
             return
 
-        _, attachment_data = get_latest_attachment(mail, email_ids)
+        attachment_data = get_latest_attachment(mail, email_ids)
         if not attachment_data:
             print("No valid Excel attachment found in the recent emails.")
             return
