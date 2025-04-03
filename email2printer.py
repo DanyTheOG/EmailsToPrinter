@@ -17,7 +17,7 @@ GMAIL_USER = os.environ.get("GMAIL_USER")
 GMAIL_PASSWORD = os.environ.get("GMAIL_PASSWORD")
 PRINTER_EMAIL = os.environ.get("PRINTER_EMAIL")
 
-SEARCH_PHRASE = "Daily Leads Report"  # Text to search for in email body
+SEARCH_PHRASE = "Daily Leads Report"  # Must match the email content exactly
 ATTACHMENT_EXT = ".xlsx"             # Excel attachment extension
 TEMP_PDF = "report.pdf"              # Temporary PDF file name
 
@@ -101,21 +101,40 @@ def get_latest_attachment(mail, email_ids):
     return attachment_data
 
 def convert_excel_to_pdf(excel_data):
-    """Convert the first sheet of the Excel file to a PDF."""
+    """Convert the first sheet of the Excel file to a PDF with text wrapping."""
+    # Load workbook from bytes and select the first sheet
     wb = openpyxl.load_workbook(BytesIO(excel_data), data_only=True)
-    ws = wb.active  # Use the first sheet
+    ws = wb.active
 
-    # Extract worksheet data into a list of lists
-    data = []
+    # Extract worksheet data into a list of lists (as plain text)
+    raw_data = []
     for row in ws.iter_rows(values_only=True):
-        data.append([str(cell) if cell is not None else "" for cell in row])
+        raw_data.append([str(cell) if cell is not None else "" for cell in row])
     
-    # Calculate approximate column widths based on max text width per column
+    # Import Paragraph and styles for text wrapping
+    from reportlab.platypus import Paragraph
+    from reportlab.lib.styles import getSampleStyleSheet
+    styles = getSampleStyleSheet()
+    normal_style = styles["Normal"]
+    
+    # Wrap each cell's text in a Paragraph for automatic text wrapping
+    data = []
+    for row in raw_data:
+        new_row = []
+        for cell in row:
+            new_row.append(Paragraph(cell, normal_style))
+        data.append(new_row)
+    
+    # Calculate column widths based on the plain text, capped by the available width.
     col_widths = []
-    for col in zip(*data):
-        max_width = max([stringWidth(str(item), 'Helvetica', 10) for item in col] + [0])
-        col_widths.append(max_width + 10)  # add padding
+    num_cols = len(raw_data[0]) if raw_data else 0
+    available_width = 792 - 60  # Landscape letter width (792) minus left/right margins (30+30)
+    max_col_width = available_width / num_cols if num_cols > 0 else 100
 
+    for col in zip(*raw_data):
+        calculated_width = max([stringWidth(str(item), 'Helvetica', 10) for item in col] + [0]) + 10
+        col_widths.append(min(calculated_width, max_col_width))
+    
     # Create PDF document in landscape orientation
     doc = SimpleDocTemplate(
         TEMP_PDF,
