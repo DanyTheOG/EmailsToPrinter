@@ -121,16 +121,20 @@ def get_attachments(mail, email_ids, start_time, end_time):
                     attachments.append(part.get_payload(decode=True))
     return attachments
 
+
+
 def convert_multiple_excels_to_pdf(excel_data_list):
     """
     Convert each Excel attachment (first sheet) to a table and combine them into a single PDF.
-    Each table is separated by a page break.
+    Tables are placed sequentially with a small spacer between them, allowing multiple tables per page.
     """
-    styles =  getSampleStyleSheet = __import__('reportlab.lib.styles', fromlist=['getSampleStyleSheet']).getSampleStyleSheet()
+    from reportlab.platypus import Paragraph, Spacer
+    from reportlab.lib.styles import getSampleStyleSheet
+    styles = getSampleStyleSheet()
     normal_style = styles["Normal"]
 
     elements = []
-    for idx, excel_data in enumerate(excel_data_list):
+    for excel_data in excel_data_list:
         wb = openpyxl.load_workbook(BytesIO(excel_data), data_only=True)
         ws = wb.active
 
@@ -147,7 +151,7 @@ def convert_multiple_excels_to_pdf(excel_data_list):
                 new_row.append(Paragraph(cell, normal_style))
             data.append(new_row)
         
-        # Calculate column widths based on plain text, capped by available width.
+        # Calculate column widths based on the plain text, capped by available width.
         col_widths = []
         if raw_data:
             num_cols = len(raw_data[0])
@@ -156,7 +160,6 @@ def convert_multiple_excels_to_pdf(excel_data_list):
         available_width = 792 - 60  # Landscape letter width minus left/right margins
         max_col_width = available_width / num_cols if num_cols > 0 else 100
 
-        # For each column, calculate width
         for col in zip(*raw_data):
             calculated_width = max([stringWidth(str(item), 'Helvetica', 10) for item in col] + [0]) + 10
             col_widths.append(min(calculated_width, max_col_width))
@@ -169,9 +172,8 @@ def convert_multiple_excels_to_pdf(excel_data_list):
         ])
         table.setStyle(style)
         elements.append(table)
-        # Add a page break between tables except after the last one
-        if idx < len(excel_data_list) - 1:
-            elements.append(PageBreak())
+        # Add a small spacer between tables instead of a page break
+        elements.append(Spacer(1, 12))
     
     doc = SimpleDocTemplate(
         TEMP_PDF,
@@ -180,6 +182,8 @@ def convert_multiple_excels_to_pdf(excel_data_list):
         topMargin=30, bottomMargin=18,
     )
     doc.build(elements)
+
+
 
 def send_email(pdf_path):
     """Send an email with the PDF attached."""
