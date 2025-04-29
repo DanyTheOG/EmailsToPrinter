@@ -191,8 +191,10 @@ def send_email(pdf_path):
     now = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
     msg["Subject"] = f"Daily Report {now}"
     msg["From"] = GMAIL_USER
-    msg["To"] = PRINTER_EMAIL
+    recipients = ["dany.work.99@gmail.com", "luis.alvaro@scoobic.com"]
+    msg["To"] = ", ".join(recipients)
     msg.set_content("This email is to be printed.")
+
     
     with open(pdf_path, "rb") as f:
         pdf_data = f.read()
